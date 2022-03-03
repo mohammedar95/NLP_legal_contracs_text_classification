@@ -1,0 +1,366 @@
+---
+title: "NLP Legal Documents"
+author: "Mohammed Alrashidan"
+date: "12/5/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+source("/Users/mo/Desktop/Desktop/School/USF/Courses/Fall 2021/NLP/Functions/load_NLP_env.R")
+path <- "/Users/mo/Desktop/Desktop/School/USF/Courses/Fall 2021/NLP/Functions/"
+load_NLP_env(path)
+```
+
+```{r}
+file_path <- "/Users/mo/Desktop/Desktop/School/USF/Courses/Fall 2021/NLP/Project/legal_docs.csv"
+data <- read.csv(file_path)
+```
+
+```{r}
+head(data,2)
+```
+
+
+```{r}
+text <- pre_process_corpus(data, "clause_text", replace_numbers = T, root_gen = "lemmatize" )
+data$clause_preprocessed <- text
+```
+
+```{r}
+head(data$clause_text,5)
+```
+
+
+```{r}
+head(data$clause_preprocessed,5)
+```
+
+# 2- Construct a DTM that includes unigrams, bigrams, and trigrams.
+
+```{r}
+grams <- itoken(data$clause_preprocessed, tokenizer = word_tokenizer, ids = data$X)
+vocab <- create_vocabulary(grams, ngram = c(1,3))
+
+lbound <- round(0.0009 * nrow(data))
+
+vocab <- vocab[vocab$doc_count > 20,]
+library(stringr)
+vocab$ngram <- str_count(vocab$term, "_")+1
+
+vectorizer <- vocab_vectorizer(vocab)
+dtm_legal <- create_dtm(grams, vectorizer)
+dim(dtm_legal)
+
+```
+
+# Frequency Analysis
+```{r}
+freq_table <- data.frame(term = colnames(dtm_legal), n = colSums(dtm_legal),
+                         freq = colSums(dtm_legal)/sum(dtm_legal))
+
+freq_table <- freq_table[order(freq_table$freq, decreasing = T),]
+freq_table$ngram <- str_count(freq_table$term, "_")+1
+```
+
+
+# Zipf’s Law where frequency that a word appears is inversely proportional to its rank.
+```{r}
+ggplot(freq_table, aes(freq)) + 
+  geom_histogram(fill = 'lightblue') + lims(x= c(0.0,0.005), y=c(0,1500))+
+  labs(y = "Term Count", x= "Frequency",
+       title = "Frequnecy Distribution of Legal Terms") + theme(plot.title = element_text(hjust = 0.5))
+ggsave("Zipf’s Law where frequency.png", units="in", width=5, height=4, dpi=720)
+
+```
+
+```{r}
+freq_table$rank <- 1:nrow(freq_table)
+ggplot(freq_table, aes(rank, freq)) + geom_line(color = 'lightblue') + scale_x_log10() + scale_y_log10() + 
+  labs(x = "Rank", y= "Frequency",
+       title = "Rank Distribution of Legal Terms") + theme(plot.title = element_text(hjust = 0.5))
+ggsave("Zipf’s Law Rank.png", units="in", width=5, height=4, dpi=720)
+```
+
+# Where most frequent words based on clause type
+```{r}
+clause_type_chr <- tolower(unique(data$clause_type))
+df <- freq_table[freq_table$term %in% clause_type_chr, ]
+top_terms <- head(freq_table,20)
+ggplot(top_terms,aes(x = reorder(term, freq), y = freq, fill = term)) + 
+  sgeom_bar(stat = "identity", show.legend = F, , fill='40608C') + coord_flip() + xlab("clause_type") + 
+  labs(y= "Terms", x= "Frequency",
+       title = "Top Frequent Terms in Legal Clauses") + 
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("Top Frequent Terms in Legal Clauses.png", units="in", width=5, height=4, dpi=720)
+
+ggplot(df,aes(x = reorder(term, df$freq), y = freq, fill = term)) +
+  geom_bar(stat = "identity", show.legend = F, fill='40608C') + coord_flip() + xlab("clause_type") + 
+  labs(y= "Type", x= "Frequency",
+       title = "Top Clause Type of Frequent Terms in Legal Clauses") + 
+  theme(plot.title = element_text(hjust = 0.5)) 
+ggsave("Top Clause Type of Frequent Terms in Legal Clauses.png", units="in", width=5, height=4, dpi=720)
+```
+
+
+# tf-idf of words accross all type of clauses # Top 10 words using tf_idf in each clasue type
+```{r fig.height=9, fig.width=18}
+library(dplyr)
+library(janeaustenr)
+library(tidytext)
+library(forcats)
+
+freq_table1 <- data %>%
+  unnest_tokens(word, clause_preprocessed) %>%
+  count(clause_type, word, sort = TRUE)
+
+total_words <- freq_table1 %>% 
+  group_by(clause_type) %>% 
+  summarize(total = sum(n))
+
+freq_table1 <- left_join(freq_table1, total_words)
+
+book_tf_idf <- freq_table1 %>%
+  bind_tf_idf(word, clause_type, n)
+
+
+types <- c('financing',"grabt_of_option", "interest", "investments", "loan", "ownership_of_shares", "taxes", 'vesting', "Termination", "Insurance")
+
+book_tf_idf <- book_tf_idf %>%
+  group_by(clause_type) %>%
+  slice_max(tf_idf, n = 10) %>%
+  ungroup()
+
+p1 <- ggplot(subset(book_tf_idf, clause_type %in% types), aes(tf_idf, fct_reorder(word, tf_idf), fill = clause_type)) +
+  geom_col(show.legend = FALSE, width = 0.2, position = position_dodge(width=1)) +
+  facet_wrap(~clause_type, ncol=4, scales = "free") +
+  labs(x = "tf-idf", y = NULL)
+p1 + 
+  labs(x= "Tf-idf",
+       title = "Top Important Terms by Clause Type in Legal Clauses") + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        strip.text.x = element_text(size = 20),
+        axis.text.y = element_text(size = 15, face='bold')) 
+ggsave("Top Important Terms by Clause Type in Legal Clauses.png", units="in", dpi=720)
+```
+
+
+
+
+# Relationships between Words using Skip-Gram/CBOW Models Word Embeddings
+```{r}
+
+skipgrams <- unnest_tokens(data, ngram, clause_preprocessed, token = "ngrams", n = 9)
+skipgrams$ngramID <- 1:nrow(skipgrams)
+skipgrams$skipgramID <- paste(skipgrams$X_unit_id, skipgrams$ngramID, sep = '_')
+
+skipgrams <- unnest_tokens(skipgrams, word, ngram)
+
+library(widyr)
+skipgram_probs <- pairwise_count(skipgrams, word, skipgramID, diag = T, sort = T)
+skipgram_probs$p <- skipgram_probs$n/sum(skipgram_probs$n)
+skipgram_probs[1:30,]
+
+
+unigram_probs <- unnest_tokens(data, word, clause_preprocessed)
+unigram_probs <- count(unigram_probs, word, sort = T)
+unigram_probs$p <- unigram_probs$n/sum(unigram_probs$n)
+
+
+lbound <- 20
+normed_probs <- skipgram_probs[skipgram_probs$n > lbound,]
+colnames(normed_probs) <- c('word1', 'word2', 'n', 'p_all')
+
+normed_probs <- merge(normed_probs, unigram_probs[, c('word', 'p')], by.x = 'word2', by.y = 'word', all.x = T)
+normed_probs <- merge(normed_probs, unigram_probs[, c('word', 'p')], by.x = 'word1', by.y = 'word', all.x = T)
+
+normed_probs$p_combined <- normed_probs$p_all/normed_probs$p.x/normed_probs$p.y
+
+normed_probs <- normed_probs[order(normed_probs$p_combined, decreasing = T),]
+normed_probs$pmi <- log(normed_probs$p_combined)
+
+normed_probs[normed_probs$word1 == 'bank',][1:20,]
+
+pmi_matrix <- cast_sparse(normed_probs, word1, word2, pmi)
+pmi_matrix@x[is.na(pmi_matrix@x)] <- 0
+dim(pmi_matrix)
+library(irlba)
+pmi_svd <- irlba(pmi_matrix, 256, maxit = 1e3, fastpath=FALSE)
+word_vectors <- pmi_svd$u
+rownames(word_vectors) <- rownames(pmi_matrix)
+
+```
+
+
+```{r}
+new_vector <- word_vectors["share",] + word_vectors["finance",] 
+similarities <- word_vectors %*% new_vector %>% as.data.frame() %>%
+  rename(similarity = V1) %>% arrange(-similarity)
+head(similarities)
+```
+```{r}
+new_vector <- word_vectors["company",] + word_vectors["investment",] 
+
+similarities <- word_vectors %*% new_vector %>% as.data.frame() %>%
+  rename(similarity = V1) %>% arrange(-similarity)
+head(similarities)
+```
+
+
+# LDA Topics
+```{r}
+library(stm)
+library(Matrix)
+sparse_corpus <- Matrix(dtm_legal, sparse = T)
+```
+
+
+```{r}
+topic_model2 <- stm(sparse_corpus, init.type = 'LDA', seed = 12345,
+                   K = 8, control = list(alpha = 64))
+
+
+topic_prevalence <- as.data.frame(topic_model2$theta)
+paste("average prevalence", round(mean(apply(topic_prevalence, 1, max)),2))
+
+
+topic_content <- as.data.frame(t(exp(topic_model2$beta$logbeta[[1]])))
+topic_names <- apply(topic_content, 2, function(x) {paste(topic_model2$vocab[order(x,
+                                      decreasing = T)[1:6]], collapse = " ")})
+topic_names
+```
+
+
+
+
+```{r fig.height=9, fig.width=18}
+df <- topic_prevalence
+colnames(df) <- topic_names
+df$type <- as.character(data$clause_type)
+df <- melt(df, id.vars = 'type', value.name = 'proportion', variable.name = 'topic')
+
+library(pals)
+p_topic <- ggplot(subset(df, type %in% types), aes(x = type, y = proportion, fill = topic)) + geom_bar(stat = 'identity')  + scale_fill_brewer(palette="Dark2") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        axis.text.y = element_text(size=14),
+        legend.position="bottom") +
+  guides(fill = guide_legend(title.position = 'top', ncol = 2)) + coord_flip()
+p_topic + 
+  labs(y= "Prevalence Proportion",
+       title = "Clause Type by the Topic Prevalence Proportion") + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        strip.text.x = element_text(size = 20),
+        axis.text.y = element_text(size = 15, face='bold')) 
+ggsave("Clause Type by the Topic Prevalence Proportion.png", units="in", dpi=720)
+```
+
+
+
+# Sentiments Analyis on Unsupervised legal clauses
+
+```{r}
+library(syuzhet)
+library(textdata)
+afinn <- get_sentiments("afinn")
+
+
+data$sentiment <- get_sentiment(data$clause_preprocessed)
+theoffice %>% 
+  group_by(character) %>% 
+  summarise(sent=mean(sentiment), n=n()) %>% 
+  arrange(desc(n)) %>% head(n=20) %>% 
+  arrange(desc(sent))
+```
+
+
+# Sentiment on Clause Type
+
+
+```{r}
+data %>% 
+  unnest_tokens(word, clause_preprocessed) -> wordsdf
+
+
+
+wordsdf %>% 
+  inner_join(get_sentiments("afinn")) %>%
+  group_by(clause_type) %>%
+  summarize(sent=mean(value), n=n()) %>%
+  arrange(desc(n)) %>%
+  arrange(desc(sent)) -> afinndf
+
+download.file("https://saifmohammad.com/WebDocs/VAD/NRC-VAD-Lexicon-Aug2018Release.zip", destfile="NRCVAD.zip")
+unzip("NRCVAD.zip")
+
+Valencedf <- read.table("NRC-VAD-Lexicon-Aug2018Release/OneFilePerDimension/v-scores.txt", header=F, sep="\t")
+names(Valencedf) <- c("word","valence")
+vdf <- tibble(Valencedf)
+
+wordsdf %>% 
+  inner_join(vdf) %>%
+  group_by(clause_type) %>%
+  summarize(meanvalence=mean(valence), n=n()) %>%
+  arrange(desc(n)) %>%
+  head(20) %>%
+  arrange(desc(meanvalence)) -> nrcdf
+
+joindf <- inner_join(nrcdf, afinndf, by="clause_type")
+plot(joindf$meanvalence, joindf$sent, type="n", xlab="NRC Valence", ylab="AFINN score")
+text(joindf$meanvalence, joindf$sent, joindf$clause_type)
+
+
+
+jpeg('sent.jpg')
+dev.off()
+
+max(afinndf$sent)
+```
+
+```{r}
+cor.test(joindf$meanvalence, joindf$sent)
+```
+
+
+```{r fig.height=10, fig.width=10}
+data %>% 
+  unnest_tokens(word, clause_preprocessed) -> wordsdf
+
+wordsdf %>% 
+  inner_join(get_sentiments("afinn")) %>%
+  group_by(word) %>%
+  summarize(sent=mean(value), n=n()) %>%
+  arrange(desc(n)) %>%
+  arrange(desc(sent)) -> afinndf
+
+download.file("https://saifmohammad.com/WebDocs/VAD/NRC-VAD-Lexicon-Aug2018Release.zip", destfile="NRCVAD.zip")
+unzip("NRCVAD.zip")
+
+Valencedf <- read.table("NRC-VAD-Lexicon-Aug2018Release/OneFilePerDimension/v-scores.txt", header=F, sep="\t")
+names(Valencedf) <- c("word","valence")
+vdf <- tibble(Valencedf)
+
+wordsdf %>% 
+  inner_join(vdf) %>%
+  group_by(word) %>%
+  summarize(meanvalence=mean(valence), n=n()) %>%
+  arrange(desc(n)) %>%
+  arrange(desc(meanvalence)) -> nrcdf
+
+joindf <- inner_join(nrcdf, afinndf, by="word")
+plot(joindf$meanvalence, joindf$sent, type="n", xlab="NRC Valence", ylab="AFINN score")
+text(joindf$meanvalence, joindf$sent, joindf$word)
+
+length(unique(wordsdf$word))
+```
+
+```{r}
+cor.test(joindf$meanvalence, joindf$sent)
+```
+
+
+
+
+
